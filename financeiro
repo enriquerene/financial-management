@@ -1,0 +1,199 @@
+#!/usr/bin/bash
+USER=appfin
+PASS=appsecret
+HOST=localhost
+DBNAME=appfinanceiro
+
+PROGRAM_NAME="$0"
+COMMAND="$1"
+
+function get_month_number () {
+    case "$1" in
+        jan | janeiro) echo 01 ;;
+        fev | fevereiro) echo 02 ;;
+        mar | marco) echo 03 ;;
+        abr | abril) echo 04 ;;
+        mai | maio) echo 05 ;;
+        jun | junho) echo 06 ;;
+        jul | julho) echo 07 ;;
+        ago | agosto) echo 08 ;;
+        set | setembro) echo 09 ;;
+        out | outubro) echo 10 ;;
+        nov | novembro) echo 11 ;;
+        dez | dezembro) echo 12 ;;
+        *) echo "" ;;
+    esac
+}
+function get_month_full_name () {
+    case "$1" in
+        jan | janeiro) echo janeiro ;;
+        fev | fevereiro) echo fevereiro ;;
+        mar | marco) echo marco ;;
+        abr | abril) echo abril ;;
+        mai | maio) echo maio ;;
+        jun | junho) echo junho ;;
+        jul | julho) echo julho ;;
+        ago | agosto) echo agosto ;;
+        set | setembro) echo setembro ;;
+        out | outubro) echo outubro ;;
+        nov | novembro) echo novembro ;;
+        dez | dezembro) echo dezembro ;;
+        *) echo "" ;;
+    esac
+}
+
+case $COMMAND in
+    historico | registros)
+        if [[ "$2" == "" ]]; then
+            mysql -u$USER -h$HOST -p$PASS $DBNAME -e 'select expenses.id as ID, concat(substring(expenses.date,9), "/", substring(expenses.date,6,2), "/", substring(expenses.date,1,4)) as DATA, lpad(concat(substring(expenses.value,1,length(expenses.value)-2), ",", substring(expenses.value,-2)), 8, " ") as "VALOR (R$)", expenses.name as TÍTULO, sources.name as FONTE, categories.name as CATEGORIA from expenses inner join categories on categories.id = expenses.category_id inner join sources on sources.id = expenses.source_id order by expenses.id desc;'
+        else
+            case "$2" in
+                filter | filtrar)
+                    if [[ "$3" == "" ]]; then
+                        echo "Deve ser usado da seguinte forma:"
+                        echo "$PROGRAM_NAME $COMMAND $2 <mês>"
+                    else
+                        MONTH=$(get_month_number $3)
+                        if [[ "$3" == "" ]]; then
+                            echo "Mês $3 inválido..."
+                        else
+                            mysql -u$USER -h$HOST -p$PASS $DBNAME -e "select expenses.id as ID, concat(substring(expenses.date,9), '/', substring(expenses.date,6,2), '/', substring(expenses.date,1,4)) as DATA, lpad(concat(substring(expenses.value,1,length(expenses.value)-2), ',', substring(expenses.value,-2)), 8, ' ') as 'VALOR (R$)', expenses.name as TÍTULO, sources.name as FONTE, categories.name as CATEGORIA from expenses inner join categories on categories.id = expenses.category_id inner join sources on sources.id = expenses.source_id where expenses.date like '%-$MONTH-%' order by expenses.id desc;"
+                        fi
+                    fi
+                ;;
+                soma | sum)
+                    if [[ "$3" == "" ]]; then
+                        echo "Deve ser usado da seguinte forma:"
+                        echo "$PROGRAM_NAME $COMMAND $2 <mês>"
+                    else
+                        MONTH_NAME=$(get_month_full_name $3)
+                        MONTH=$(get_month_number $3)
+                        if [[ "$3" == "" ]]; then
+                            echo "Mês $3 inválido..."
+                        else
+                            TOTAL=$(mysql -u$USER -h$HOST -p$PASS $DBNAME -e "select sum(value) from expenses where date like '%-$MONTH-%'" | tail -1)
+                            PRICE_STRING_LENGTH=${#TOTAL}
+                            CURRENCY_LENGTH=$(($PRICE_STRING_LENGTH - 2))
+                            CURRENCY_INTEGER=${TOTAL:0:$CURRENCY_LENGTH}
+                            CURRENCY_CENTS=${TOTAL:$CURRENCY_LENGTH:$PRICE_STRING_LENGTH}
+                            echo "VALOR TOTAL GASTO EM $MONTH_NAME: R$ $CURRENCY_INTEGER,$CURRENCY_CENTS"
+                        fi
+                    fi
+                ;;
+                *)
+                    echo "Este comando é inválido..."
+                ;;
+            esac
+        fi
+    ;;
+    adicionar | registrar | inserir)
+        echo "Insira os dados do gasto para armazenar no banco de dados."
+        echo "Responda as questões e confirme ao final."
+        OK=N
+        while [ "$OK" != "S" ] && [ "$OK" != "s" ] && [ "$OK" != "" ]; do
+            echo "Qual a data do pagamento (exemplo: 22/05/2022)?"
+            read DATE_USUAL
+            if [[ "$DATE_USUAL" == "hoje" ]]; then
+                DATE_USUAL=$(date +'%d/%m/%Y')
+            fi
+
+            echo "Qual o valor (exemplo: 12,50)?"
+            read VALUE
+
+            echo "Qual a fonte do pagamento? Digite o ID da categoria abaixo:"
+            mysql -u$USER -h$HOST -p$PASS $DBNAME -e 'select id as ID, name as FONTE from sources;';
+            read SOURCE_ID
+            SOURCE_NAME=$(mysql -u$USER -h$HOST -p$PASS $DBNAME -e 'select name from sources where id = '$SOURCE_ID';' | tail -1)
+
+            echo "Qual o título desse pagamento (exemplo: mercado princesa)?"
+            read NAME
+
+            echo "Pertence a qual categoria? Digite o ID da categoria abaixo:"
+            mysql -u$USER -h$HOST -p$PASS $DBNAME -e 'select id as ID, name as NOME, description as DESCRIÇÃO from categories;';
+            read CATEGORY_ID
+
+            CATEGORY_NAME=$(mysql -u$USER -h$HOST -p$PASS $DBNAME -e 'select name from categories where id = '$CATEGORY_ID';' | tail -1)
+            echo "Os dados estão corretos?"
+            echo ""
+            echo "DATA: $DATE_USUAL"
+            echo "VALOR: $VALUE"
+            echo "TÍTULO: $NAME"
+            echo "FONTE PAGAMENTO: $SOURCE_NAME"
+            echo "CATEGORIA: $CATEGORY_NAME"
+            echo ""
+            echo "(Pressione S ou deixe em branco para confirmar)"
+            read OK
+        done
+
+        VALUE_INTEGER=$(echo $VALUE | sed 's/,//')
+        DATE_YEAR=$(echo $DATE_USUAL | cut -d'/' -f 3)
+        DATE_MONTH=$(echo $DATE_USUAL | cut -d'/' -f 2)
+        DATE_DAY=$(echo $DATE_USUAL | cut -d'/' -f 1)
+        DATE="$DATE_YEAR-$DATE_MONTH-$DATE_DAY"
+
+        echo ""
+        echo "Armazenando dados..."
+        mysql -u$USER -h$HOST -p$PASS $DBNAME -e "insert into expenses (date, value, name, source_id, category_id) values ('$DATE', $VALUE_INTEGER, '$NAME', $SOURCE_ID, $CATEGORY_ID);"
+
+        echo ""
+        echo "Última despesa registrada:"
+        $PROGRAM_NAME historico | head -2
+    ;;
+    fonte | source)
+        case "$2" in
+            add | adicionar)
+                echo "Qual o nome da fonte financeira a ser adicionada?"
+                read SOURCE_NAME
+                mysql -u$USER -h$HOST -p$PASS $DBNAME -e "insert into sources (name) values ('$SOURCE_NAME');"
+                $PROGRAM_NAME source list
+            ;;
+            remove | remover)
+                echo "Qual a fonte financeira deve ser removida?"
+                IS_CORRECT=N
+                while [ "$IS_CORRECT" != "S" ] && [ "$IS_CORRECT" != "s" ] && [ "$IS_CORRECT" != "" ]; do
+                    echo "Digite o ID da fonte que deve ser removida:"
+                    mysql -u$USER -h$HOST -p$PASS $DBNAME -e 'select id as ID, name as FONTE from sources;';
+                    read SOURCE_ID
+                    SOURCE_NAME=$(mysql -u$USER -h$HOST -p$PASS $DBNAME -e 'select name from sources where id = '$SOURCE_ID';' | tail -1)
+                    echo "Fonte a ser removida é $SOURCE_NAME"
+                    echo "(Pressione S ou deixe em branco para confirmar)"
+                    read IS_CORRECT
+                done
+                mysql -u$USER -h$HOST -p$PASS $DBNAME -e "delete from sources where id = $SOURCE_ID;"
+                $PROGRAM_NAME source list
+            ;;
+            list | listar)
+                echo "Fontes financeiras cadastradas?"
+                mysql -u$USER -h$HOST -p$PASS $DBNAME -e "select id as ID, name as FONTE from sources;"
+            ;;
+            *)
+                echo "Este comando é inválido..."
+            ;;
+        esac
+    ;;
+    categoria | category)
+        case "$2" in
+            add | adicionar)
+                echo "Qual o nome da categoria financeira a ser adicionada?"
+                read CAT_NAME
+                echo "Qual o nome da descrição dessa categoria?"
+                read DESCRIPTION
+                mysql -u$USER -h$HOST -p$PASS $DBNAME -e "insert into categories (name, description) values ('$CAT_NAME', '$DESCRIPTION');"
+                $PROGRAM_NAME category list
+            ;;
+            list | listar)
+                echo "Fontes financeiras cadastradas?"
+                mysql -u$USER -h$HOST -p$PASS $DBNAME -e "select id as ID, name as NOME, description as DESCRIÇÃO from categories;"
+            ;;
+            *)
+                echo "Este comando é inválido..."
+            ;;
+        esac
+    ;;
+    *)
+        echo "Comando $COMMAND inválido."
+        echo "Use '$PROGRAM_NAME historico' ou '$PROGRAM_NAME registros' para ler os últimos registros de gastos"
+        echo "Use '$PROGRAM_NAME adicionar', '$PROGRAM_NAME inserir' ou '$PROGRAM_NAME registrar' para inserir registro de gastos"
+        echo "Use '$PROGRAM_NAME fonte adicionar' para inserir uma nova fonte financeira"
+    ;;
+esac
